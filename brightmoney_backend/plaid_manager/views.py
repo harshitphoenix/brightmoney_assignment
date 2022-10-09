@@ -1,9 +1,13 @@
 import datetime
+import time
 import plaid
-# from plaid.model.link_token_create_request import LinkTokenCreateRequest
-# from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
-# from plaid.model.products import Products
-# from plaid.model.country_code import CountryCode
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
+from plaid.model.products import Products
+from plaid.model.country_code import CountryCode
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from .serializers import AccessToken
@@ -15,66 +19,135 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import TokenAuthentication
 from .models import Item
 from .constants import *
+from plaid.api import plaid_api
 
-client = plaid.Client(client_id=PLAID_CLIENT_ID, secret=PLAID_SECRET,
-                      public_key=PLAID_PUBLIC_KEY, environment=PLAID_ENV, api_version='2020-09-14')
+if PLAID_ENV == 'sandbox':
+    host = plaid.Environment.Sandbox
 
-# class LinkTokenAPIView(APIView):
-#     authentication_classes = (TokenAuthentication,)
-#     permission_classes = [IsAuthenticated]
+if PLAID_ENV == 'development':
+    host = plaid.Environment.Development
 
-#     def post(self, request):
-#         user = self.request.user
-#         print(PLAID_CLIENT_ID)
-#         print(user.id)
-#         # link_token_request = LinkTokenCreateRequest(
-#         #     user=LinkTokenCreateRequestUser(
-#         #         client_user_id=str(user.id),
-#         #     ),
-#         #     client_name='BRIGHT MONEY ASSIGNMENT',
-#         #     products=[Products.TRANSACTIONS],
-#         #     country_codes=[CountryCode.US],
-#         #     language='en',
-#         #     webhook='https://webhook.sample.com',
+if PLAID_ENV == 'production':
+    host = plaid.Environment.Production
 
-#         # )
-#         link_token_response = {
-#             user: {
-#                 'client_user_id': str(user.id),
-#             },
-#             'client_name': 'BRIGHT MONEY ASSIGNMENT',
-#             'country_codes': ['US'],
-#             'language': 'en',
-#             'webhook': 'https://webhook.sample.com',
+configuration = plaid.Configuration(
+    host=host,
+    api_key={
+        'clientId': PLAID_CLIENT_ID,
+        'secret': PLAID_SECRET,
+        'plaidVersion': '2020-09-14'
+    }
+)
+api_client = plaid.ApiClient(configuration)
+client = plaid_api.PlaidApi(api_client)
+products = []
+for product in PLAID_PRODUCTS:
+    products.append(Products(product))
 
-#         }
-#         link_token_response = client.Link.create(link_token_request)
-#         return Response(link_token_response.to_dict(), status=status.HTTP_200_OK)
+# Create Link token
 
 
+class LinkTokenAPIView(APIView):
+    authentication_classes = (TokenAuthentication,)
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = self.request.user
+        print(PLAID_CLIENT_ID)
+        print(str(user.id))
+        try:
+            link_token_request = LinkTokenCreateRequest(
+                products=products,
+                user=LinkTokenCreateRequestUser(
+                    client_user_id=str(time.time())
+                ),
+                client_name='BRIGHT MONEY ASSIGNMENT',
+                country_codes=list(
+                    map(lambda x: CountryCode(x), PLAID_COUNTRY_CODES)),
+                language='en',
+                # webhook='https://webhook.sample.com',
+            )
+            if PLAID_REDIRECT_URI != None:
+                request['redirect_uri'] = PLAID_REDIRECT_URI
+            # link_token_response = {
+            #     user: {
+            #         'client_user_id': str(user.id),
+            #     },
+            #     'client_name': 'BRIGHT MONEY ASSIGNMENT',
+            #     'country_codes': ['US'],
+            #     'language': 'en',
+            #     'webhook': 'https://webhook.sample.com',
+
+            # }
+            link_token_response = client.link_token_create(link_token_request)
+            print(link_token_response)
+            return Response(link_token_response.to_dict(), status=status.HTTP_200_OK)
+        except plaid.ApiException as e:
+            print(e, "PLAID_ERROR")
+            return Response(e.body, status=e.status)
+        except Exception as e:
+            print(e, "ERROR")
+            return Response("Error", status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# exchange link token for public token
+
+
+class PublicTokenAPIView(APIView):
+    authentication_classes = (TokenAuthentication,)
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        request_data = request.data
+        print('request_adta', request_data)
+        institution_id = request_data.get('institution_id')
+        print('@##@@#@@', institution_id)
+        try:
+            public_token_request = SandboxPublicTokenCreateRequest(
+                institution_id=institution_id,
+                initial_products=products,
+            )
+            public_token_response = client.sandbox_public_token_create(
+                public_token_request)
+            print(public_token_response)
+            return Response(public_token_response.to_dict(), status=status.HTTP_200_OK)
+        except plaid.ApiException as e:
+            print(e, "PLAID_ERROR")
+            return Response(e.body, status=e.status)
+        except Exception as e:
+            print(e, "ERROR")
+            return Response("Error", status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Exchange public token from access token
 class AccessTokenAPIView(APIView):
     authentication_classes = (TokenAuthentication,)
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        request_data = request.POST
+        request_data = request.data
         public_token = request_data.get('public_token')
         try:
-            exchange_response = client.Item.public_token.exchange(public_token)
-            serializer = AccessToken(data=exchange_response)
-            if serializer.is_valid():
-                access_token = serializer.validated_data['access_token']
-                item = Item.objects.create(access_token=access_token,
-                                           item_id=serializer.validated_data['item_id'],
-                                           user=self.request.user
-                                           )
-                item.save()
+            exchange_request = ItemPublicTokenExchangeRequest(
+                public_token=public_token)
+            exchange_response = client.item_public_token_exchange(
+                exchange_request).to_dict()
+            print(exchange_response)
+            access_token = exchange_response['access_token']
+            item = Item.objects.create(access_token=access_token,
+                                       item_id=exchange_response['item_id'],
+                                       user=self.request.user
+                                       )
+            item.save()
 
-                # Async Task
-                fetch_transactions.delay(access_token)
+            # Async Task
+            fetch_transactions.delay(access_token)
 
-        except plaid.errors.PlaidError as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST, data={'message': e.display_message, 'request_id': request.META["X-Request-ID"]})
+        except plaid.ApiException as e:
+            print(e, "PLAID_ERROR")
+            return Response(e.body, status=e.status)
+        except Exception as e:
+            print(e, "ERROR")
+            return Response("Error", status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response(data={'exchange_response': exchange_response, 'request_id': request.META["X-Request-ID"]}, status=status.HTTP_200_OK)
 
@@ -94,10 +167,16 @@ class GetTransactionsAPI(APIView):
             end_date = '{:%Y-%m-%d}'.format(datetime.datetime.now())
 
             try:
+                request = TransactionsSyncRequest(
+                    access_token=access_token, start_date=start_date, end_date=end_date)
                 transactions_response = client.Transactions.get(
                     access_token, start_date, end_date)
-            except plaid.errors.PlaidError as e:
-                return Response(status=status.HTTP_400_BAD_REQUEST)
+            except plaid.ApiException as e:
+
+                return Response(e.body, status=e.status)
+            except Exception as e:
+                print(e, "ERROR")
+                return Response("Error", status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             return Response(data={'request_id': request.META["X-Request-ID"], 'transactions': transactions_response}, status=status.HTTP_200_OK)
         else:
@@ -116,8 +195,12 @@ class AccountInfoAPIView(APIView):
                 item_response = client.Item.get(access_token)
                 institution_response = client.Institutions.get_by_id(
                     item_response['item']['institution_id'])
-            except plaid.errors.PlaidError as e:
-                return Response(status=status.HTTP_400_BAD_REQUEST)
+            except plaid.ApiException as e:
+
+                return Response(e.body, status=e.status)
+            except Exception as e:
+                print(e, "ERROR")
+                return Response("Error", status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             return Response(
                 data={'request_id': request.META["X-Request-ID"], 'item': item_response['item'],
@@ -129,7 +212,7 @@ class AccountInfoAPIView(APIView):
 
 @csrf_exempt
 def webhook(request):
-    request_data = request.POST
+    request_data = request.data
     webhook_type = request_data.get('webhook_type')
     webhook_code = request_data.get('webhook_code')
 

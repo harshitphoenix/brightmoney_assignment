@@ -35,7 +35,7 @@ INSTALLED_APPS = [
     'plaid_manager',
     'rest_framework',
     'rest_framework.authtoken',
-    'request_id',
+    'corsheaders',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -53,6 +53,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'middleware.logging_middleware.Request',
+    'corsheaders.middleware.CorsMiddleware',
 ]
 
 LOGGING = {
@@ -86,7 +87,7 @@ LOGGING = {
 }
 
 ROOT_URLCONF = 'brightmoney.urls'
-
+CORS_ORIGIN_ALLOW_ALL = True
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',

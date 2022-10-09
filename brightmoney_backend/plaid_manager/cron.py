@@ -4,10 +4,27 @@ import datetime
 import plaid
 from .constants import *
 from .models import Account, Item, Transaction
+from plaid.api import plaid_api
+from plaid.model.transactions_sync_request import TransactionsSyncRequest
+if PLAID_ENV == 'sandbox':
+    host = plaid.Environment.Sandbox
 
+if PLAID_ENV == 'development':
+    host = plaid.Environment.Development
 
-client = plaid.Client(client_id=PLAID_CLIENT_ID, secret=PLAID_SECRET,
-                      public_key=PLAID_PUBLIC_KEY, environment=PLAID_ENV, api_version='2019-05-29')
+if PLAID_ENV == 'production':
+    host = plaid.Environment.Production
+
+configuration = plaid.Configuration(
+    host=host,
+    api_key={
+        'clientId': PLAID_CLIENT_ID,
+        'secret': PLAID_SECRET,
+        'plaidVersion': '2020-09-14'
+    }
+)
+api_client = plaid.ApiClient(configuration)
+client=plaid_api.PlaidApi(api_client)
 
 
 @shared_task
@@ -30,12 +47,16 @@ def fetch_transactions(access_token=None, item_id=None, new_transactions=500):
     start_date = '{:%Y-%m-%d}'.format(
         datetime.datetime.now() + datetime.timedelta(-730))
     end_date = '{:%Y-%m-%d}'.format(datetime.datetime.now())
-
-    transactions_response = client.Transactions.get(
-        access_token, start_date, end_date, {
+    transaction_request= TransactionsSyncRequest(
+        access_token,
+        start_date,
+        end_date,
+        {
             'count': new_transactions,
-        })
-
+        }
+    )
+    transactions_response = client.transactions_sync(transaction_request).to_dict()
+    print(transactions_response)
     if item_id is None:
         item_id = transactions_response['item']['item_id']
     item = Item.objects.filter(item_id=item_id)[0]
